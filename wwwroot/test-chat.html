@@ -1,0 +1,82 @@
+﻿<!DOCTYPE html>
+<html>
+<body>
+    <h1>ChatHub Test</h1>
+    <button onclick="runAllTests()">Run All Tests</button>
+    <div id="log" style="border:1px solid #ccc; padding:10px; height:300px; overflow:auto;"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.0/signalr.min.js"></script>
+    <script>
+        const token = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJuYW1laWQiOiI0ZjQzYTdlOC0wY2ViLTRmYmYtODhiZC1jOTI0NzUwMTNmODMiLCJlbWFpbCI6InVzZXIxQGV4YW1wbGUuY29tIiwidW5pcXVlX25hbWUiOiJVc2VyIE9uZSIsIm5iZiI6MTc2ODM5MTA0MywiZXhwIjoxNzY4OTk1ODQzLCJpYXQiOjE3NjgzOTEwNDMsImlzcyI6IkJhY2tlbmRDaGF0IiwiYXVkIjoiQmFja2VuZENoYXRDbGllbnQifQ.SMs8-TTfPomfPH8ex71yc9DM1O0GKgphGq9evrFiU-c';
+
+        let connection;
+        const log = msg => document.getElementById('log').innerHTML += msg + '<br>';
+
+        async function runAllTests() {
+            log('=== НАЧАЛО ТЕСТОВ ===');
+
+            try {
+                // Подключение
+                log('1. Подключаюсь...');
+                connection = new signalR.HubConnectionBuilder()
+                    .withUrl('http://localhost:5086/chatHub', {
+                        accessTokenFactory: () => token
+                    })
+                    .build();
+
+                // Подписки
+                connection.on("ReceiveMessage", (msg) => {
+                    log(`📩 ReceiveMessage: ${JSON.stringify(msg)}`);
+                });
+
+                connection.on("TestResponse", (response) => {
+                    log(`📩 TestResponse: ${response}`);
+                });
+
+                connection.on("SimpleResponse", (response) => {
+                    log(`📩 SimpleResponse: ${response}`);
+                });
+
+                await connection.start();
+                log('✅ Подключено');
+
+                // Тест 1: DirectReturn
+                log('2. Тест DirectReturn...');
+                const directResult = await connection.invoke("DirectReturn", "Hello");
+                log(`✅ DirectReturn: ${directResult}`);
+
+                // Тест 2: TestEcho
+                log('3. Тест TestEcho...');
+                const echoResult = await connection.invoke("TestEcho", "Test Echo");
+                log(`✅ TestEcho: ${echoResult}`);
+
+                // Тест 3: TestSend
+                log('4. Тест TestSend...');
+                await connection.invoke("TestSend", 123, "Test text");
+                log('✅ TestSend вызван');
+
+                // Тест 4: SimpleSend
+                log('5. Тест SimpleSend...');
+                await connection.invoke("SimpleSend", "Simple message");
+                log('✅ SimpleSend вызван');
+
+                // Тест 5: JoinChat
+                log('6. Тест JoinChat...');
+                await connection.invoke("JoinChat", 1);
+                log('✅ JoinChat вызван');
+
+                // Тест 6: SendMessage (главный тест)
+                log('7. Тест SendMessage...');
+                await connection.invoke("SendMessage", 1, "Тестовое сообщение из браузера");
+                log('✅ SendMessage вызван');
+
+                log('=== ВСЕ ТЕСТЫ ЗАВЕРШЕНЫ ===');
+
+            } catch (error) {
+                log(`❌ ОШИБКА: ${error.message}`);
+                if (error.stack) log(`Stack: ${error.stack}`);
+            }
+        }
+    </script>
+</body>
+</html>

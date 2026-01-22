@@ -1,0 +1,152 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <title>SignalR Chat Test</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.0/signalr.min.js"></script>
+    <style>
+        body {
+            font-family: Arial;
+            margin: 20px;
+        }
+
+        .panel {
+            border: 1px solid #ccc;
+            padding: 20px;
+            margin: 10px;
+        }
+
+        .messages {
+            height: 200px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+        }
+
+        input {
+            padding: 8px;
+            margin: 5px;
+        }
+
+        button {
+            padding: 8px 15px;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>SignalR Chat Test</h1>
+    <div>Backend URL: <span id="backend-url"></span></div>
+
+    <div class="panel">
+        <h3>User 1</h3>
+        <button onclick="loginUser(1)">Login User 1</button>
+        <div id="user1-status">Status: Not connected</div>
+        <input id="user1-message" placeholder="Message">
+        <button onclick="sendMessage(1)">Send</button>
+        <div id="user1-messages" class="messages"></div>
+    </div>
+
+    <div class="panel">
+        <h3>User 2</h3>
+        <button onclick="loginUser(2)">Login User 2</button>
+        <div id="user2-status">Status: Not connected</div>
+        <input id="user2-message" placeholder="Message">
+        <button onclick="sendMessage(2)">Send</button>
+        <div id="user2-messages" class="messages"></div>
+    </div>
+
+    <script>
+        const backendUrl = window.location.hostname === 'localhost'
+            ? 'http://localhost:5086'
+            : window.location.origin;
+        document.getElementById('backend-url').textContent = backendUrl;
+
+        const users = [
+            { email: 'user1@example.com', password: 'Password123!', token: null, connection: null },
+            { email: 'user2@example.com', password: 'Password123!', token: null, connection: null }
+        ];
+
+        async function loginUser(userIndex) {
+            const user = users[userIndex - 1];
+            const statusEl = document.getElementById(`user${userIndex}-status`);
+
+            try {
+                // Логин через API
+                const response = await fetch(`${backendUrl}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: user.email,
+                        password: user.password
+                    })
+                });
+
+                if (!response.ok) throw new Error('Login failed');
+
+                const data = await response.json();
+                user.token = data.token;
+
+                // Подключаем SignalR
+                user.connection = new signalR.HubConnectionBuilder()
+                    .withUrl(`${backendUrl}/chatHub`, {
+                        accessTokenFactory: () => user.token
+                    })
+                    .withAutomaticReconnect()
+                    .build();
+
+                user.connection.on("ReceiveMessage", (message) => {
+                    const messagesEl = document.getElementById(`user${userIndex}-messages`);
+                    messagesEl.innerHTML += `<div><strong>${message.sender.displayName}:</strong> ${message.content}</div>`;
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                });
+
+                user.connection.on("UserStatusChanged", (userId, status) => {
+                    console.log(`User ${userId} → ${status}`);
+                });
+
+                await user.connection.start();
+                await user.connection.invoke("JoinChat", 1);
+
+                statusEl.innerHTML = `Status: Connected as ${data.user.displayName}`;
+                console.log(`User ${userIndex} connected`);
+
+            } catch (error) {
+                console.error(`User ${userIndex} error:`, error);
+                statusEl.innerHTML = `Status: Error - ${error.message}`;
+            }
+        }
+
+        async function sendMessage(userIndex) {
+            const user = users[userIndex - 1];
+            const messageInput = document.getElementById(`user${userIndex}-message`);
+            const message = messageInput.value.trim();
+
+            if (!message || !user.connection) return;
+
+            try {
+                await user.connection.invoke("SendMessage", 1, message);
+                messageInput.value = '';
+            } catch (error) {
+                console.error('Send error:', error);
+                alert('Send failed: ' + error.message);
+            }
+        }
+
+        // Enter key support
+        document.getElementById('user1-message').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage(1);
+        });
+
+        document.getElementById('user2-message').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendMessage(2);
+        });
+
+        // Auto connect for testing
+        setTimeout(() => {
+            loginUser(1);
+            setTimeout(() => loginUser(2), 1000);
+        }, 1000);
+    </script>
+</body>
+</html>
