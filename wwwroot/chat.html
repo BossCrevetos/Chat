@@ -66,6 +66,9 @@
             color: green;
             font-size: 13px;
             margin-top: 3px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
 
         .user-actions {
@@ -149,6 +152,9 @@
         .chat-name {
             font-weight: bold;
             font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
 
         .chat-last {
@@ -198,6 +204,10 @@
             color: #666;
             margin-top: 5px;
             font-size: 14px;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 5px;
         }
 
         .messages {
@@ -235,6 +245,9 @@
             margin-bottom: 5px;
             font-size: 13px;
             color: #666;
+            display: flex;
+            align-items: center;
+            gap: 5px;
         }
 
         .message-time {
@@ -801,6 +814,57 @@
         .delete-btn {
             color: #ff4757 !important;
         }
+
+        /* ========== СТАТУСЫ ========== */
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            vertical-align: middle;
+        }
+
+        .status-online {
+            background-color: #4CAF50;
+            box-shadow: 0 0 5px #4CAF50;
+        }
+
+        .status-offline {
+            background-color: #9E9E9E;
+        }
+
+        .status-away {
+            background-color: #FF9800;
+            box-shadow: 0 0 5px #FF9800;
+        }
+
+        .status-busy {
+            background-color: #FF5722;
+            box-shadow: 0 0 5px #FF5722;
+        }
+
+        .status-dnd {
+            background-color: #F44336;
+            box-shadow: 0 0 5px #F44336;
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .pulse {
+            animation: pulse 1s infinite;
+        }
     </style>
 </head>
 <body>
@@ -812,7 +876,7 @@
             </div>
             <div>
                 <div class="user-name" id="user-name">Загрузка...</div>
-                <div class="user-status" id="user-status">Online</div>
+                <div class="user-status" id="user-status"></div>
             </div>
             <div class="user-actions">
                 <button id="notification-icon" onclick="showNotificationsPanel()" title="Уведомления">
@@ -903,10 +967,11 @@
             <div class="profile-section">
                 <h4>Статус</h4>
                 <div class="status-selector">
-                    <div class="status-option active" onclick="updateStatus('Online')">🟢 Онлайн</div>
-                    <div class="status-option" onclick="updateStatus('DoNotDisturb')">⛔ Не беспокоить</div>
-                    <div class="status-option" onclick="updateStatus('Away')">🌙 Отошел</div>
-                    <div class="status-option" onclick="updateStatus('Offline')">⚫ Не в сети</div>
+                    <div class="status-option active" data-status="Online" onclick="updateUserStatus('Online')">🟢 Онлайн</div>
+                    <div class="status-option" data-status="DoNotDisturb" onclick="updateUserStatus('DoNotDisturb')">⛔ Не беспокоить</div>
+                    <div class="status-option" data-status="Away" onclick="updateUserStatus('Away')">🌙 Отошел</div>
+                    <div class="status-option" data-status="Busy" onclick="updateUserStatus('Busy')">🔴 Занят</div>
+                    <div class="status-option" data-status="Offline" onclick="updateUserStatus('Offline')">⚫ Не в сети</div>
                 </div>
             </div>
 
@@ -967,15 +1032,38 @@
         <source src="https://assets.mixkit.co/sfx/preview/mixkit-correct-answer-tone-2870.mp3" type="audio/mpeg">
     </audio>
 
+ 
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.0/signalr.min.js"></script>
+
     <script>
-        const API_URL = 'http://localhost:5086';
+        // ========== НАСТРОЙКИ ==========
+        // Автоматическое определение URL API
+        function getApiUrl() {
+            const host = window.location.hostname;
+            const port = window.location.port || '5086';
+
+            if (host === 'localhost' || host === '127.0.0.1') {
+                return `http://localhost:${port}`;
+            }
+
+            if (host === '192.168.0.6') {
+                return `http://192.168.0.6:${port}`;
+            }
+
+            return window.location.origin;
+        }
+
+        const API_URL = getApiUrl();
+        console.log('📡 API URL:', API_URL);
+
         const urlParams = new URLSearchParams(window.location.search);
         const message = urlParams.get('message');
         if (message === 'password-reset-success') {
             alert('✅ Пароль успешно изменен! Теперь войдите с новым паролем.');
             window.history.replaceState({}, document.title, window.location.pathname);
         }
+
         let connection = null;
         let currentUser = null;
         let currentChat = null;
@@ -984,6 +1072,10 @@
 
         // Хранилище для ID уже показанных сообщений в ЭТОЙ сессии
         let shownMessageIds = new Set();
+
+        // Таймеры для статусов
+        let idleTimer = null;
+        let statusCheckInterval = null;
 
         // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
         function escapeHtml(text) {
@@ -1021,16 +1113,218 @@
             const modal = document.createElement('div');
             modal.className = 'image-modal';
             modal.innerHTML = `
-                    <img src="${imageUrl}" alt="Изображение" style="max-width: 90vw; max-height: 90vh;">
-                    <button class="image-modal-close" onclick="this.parentElement.remove()"
-                            style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: white; font-size: 30px; cursor: pointer;">
-                        ×
-                    </button>
-                `;
+                            <img src="${imageUrl}" alt="Изображение" style="max-width: 90vw; max-height: 90vh;">
+                            <button class="image-modal-close" onclick="this.parentElement.remove()"
+                                    style="position: absolute; top: 20px; right: 20px; background: none; border: none; color: white; font-size: 30px; cursor: pointer;">
+                                ×
+                            </button>
+                        `;
             modal.onclick = (e) => {
                 if (e.target === modal) modal.remove();
             };
             document.body.appendChild(modal);
+        }
+
+        // ========== СТАТУСЫ ПОЛЬЗОВАТЕЛЕЙ ==========
+        async function updateUserStatus(status) {
+            if (!connection || connection.state !== 'Connected') {
+                console.log('❌ Нет соединения для обновления статуса');
+                return;
+            }
+
+            try {
+                console.log(`🔄 Обновление статуса на: ${status}`);
+
+                // Отправляем через SignalR
+                await connection.invoke("UpdateStatus", status);
+
+                // Также обновляем через REST API для надежности
+                const token = localStorage.getItem('chat_token');
+                await fetch(`${API_URL}/api/profile/status`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ status: status })
+                });
+
+                // Обновляем UI
+                if (currentUser) {
+                    currentUser.status = status;
+                    updateUserUI();
+                }
+
+                // Обновляем активные кнопки в панели профиля
+                updateStatusButtons(status);
+
+                console.log(`✅ Статус обновлен: ${status}`);
+            } catch (error) {
+                console.error('❌ Ошибка обновления статуса:', error);
+            }
+        }
+
+        function updateStatusButtons(activeStatus) {
+            const statusButtons = document.querySelectorAll('.status-option');
+            statusButtons.forEach(btn => {
+                const status = btn.getAttribute('data-status');
+                if (status === activeStatus) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+            });
+        }
+
+        async function loadUserStatuses() {
+            if (!currentChat || !currentChat.participants || !currentUser) return;
+
+            try {
+                let participants = currentChat.participants;
+                if (typeof participants === 'string') {
+                    try {
+                        participants = JSON.parse(participants);
+                    } catch (e) {
+                        console.error('Ошибка парсинга participants:', e);
+                        participants = [];
+                    }
+                }
+
+                if (!Array.isArray(participants)) {
+                    console.error('Participants не массив:', participants);
+                    return;
+                }
+
+                // Получаем ID других участников (с проверкой на null)
+                const userIds = participants
+                    .filter(p => {
+                        if (!p) return false; // проверяем на null
+                        const participantId = p.id || p.userId;
+                        return participantId &&
+                            String(participantId) !== String(currentUser.id);
+                    })
+                    .map(p => p.id || p.userId)
+                    .filter(id => id); // убираем null/undefined
+
+                console.log('Загрузка статусов для пользователей:', userIds);
+
+                if (userIds.length === 0) return;
+
+                const token = localStorage.getItem('chat_token');
+                const queryString = userIds.map(id => `userIds=${encodeURIComponent(id)}`).join('&');
+                const response = await fetch(`${API_URL}/api/profile/statuses?${queryString}`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (response.ok) {
+                    const statuses = await response.json();
+                    console.log('Статусы получены:', statuses);
+                    updateParticipantsStatus(statuses);
+                } else if (response.status === 404) {
+                    console.log('Endpoint статусов не найден, пропускаем');
+                } else {
+                    console.error('Ошибка загрузки статусов:', response.status);
+                }
+            } catch (error) {
+                console.error('❌ Ошибка загрузки статусов:', error);
+            }
+        }
+
+        function updateParticipantsStatus(statuses) {
+            const participantsElement = document.getElementById('chat-participants');
+            if (!participantsElement) return;
+
+            let participantsText = '';
+
+            if (currentChat && currentChat.participants) {
+                let participants = currentChat.participants;
+                if (typeof participants === 'string') {
+                    try {
+                        participants = JSON.parse(participants);
+                    } catch (e) {
+                        participants = [];
+                    }
+                }
+
+                if (Array.isArray(participants)) {
+                    const namesWithStatus = participants.map(p => {
+                        const participantId = p.id || p.userId;
+                        const userName = p.displayName || p.email?.split('@')[0] || 'Пользователь';
+                        const status = statuses[participantId] || 'Offline';
+                        const statusIcon = getStatusIcon(status);
+
+                        if (String(participantId) === String(currentUser.id)) {
+                            return `${userName} ${statusIcon}`;
+                        } else {
+                            return `${userName} ${statusIcon}`;
+                        }
+                    });
+
+                    participantsText = namesWithStatus.join(', ');
+                }
+            }
+
+            participantsElement.innerHTML = participantsText;
+        }
+
+        function getStatusIcon(status) {
+            switch (status.toLowerCase()) {
+                case 'online': return '<span class="status-indicator status-online" title="Онлайн"></span>';
+                case 'offline': return '<span class="status-indicator status-offline" title="Не в сети"></span>';
+                case 'away': return '<span class="status-indicator status-away" title="Отошел"></span>';
+                case 'busy': return '<span class="status-indicator status-busy" title="Занят"></span>';
+                case 'donotdisturb': return '<span class="status-indicator status-dnd" title="Не беспокоить"></span>';
+                default: return '<span class="status-indicator status-offline" title="Не в сети"></span>';
+            }
+        }
+
+        // Система автоматического Away статуса
+        function setupIdleDetection() {
+            resetIdleTimer();
+
+            // События активности пользователя
+            const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+            activityEvents.forEach(event => {
+                document.addEventListener(event, () => {
+                    resetIdleTimer();
+
+                    // Если статус был Away - возвращаем Online
+                    if (currentUser && currentUser.status === 'Away' && connection && connection.state === 'Connected') {
+                        updateUserStatus('Online');
+                    }
+                });
+            });
+
+            // Периодическая проверка активности
+            statusCheckInterval = setInterval(async () => {
+                if (connection && connection.state === 'Connected') {
+                    try {
+                        await connection.invoke("UpdateUserActivity");
+                        await connection.invoke("CheckUserActivity");
+                    } catch (error) {
+                        console.error('Ошибка проверки активности:', error);
+                    }
+                }
+            }, 60000); // Каждую минуту
+        }
+
+        function resetIdleTimer() {
+            clearTimeout(idleTimer);
+
+            idleTimer = setTimeout(async () => {
+                if (currentUser && currentUser.status !== 'Away' &&
+                    currentUser.status !== 'DoNotDisturb' &&
+                    currentUser.status !== 'Offline') {
+
+                    if (connection && connection.state === 'Connected') {
+                        console.log('⏱️ Пользователь неактивен более 5 минут, устанавливаю Away');
+                        await updateUserStatus('Away');
+                    }
+                }
+            }, 5 * 60 * 1000); // 5 минут
         }
 
         // ========== РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ СООБЩЕНИЙ ==========
@@ -1047,7 +1341,6 @@
             let currentContent = '';
 
             if (contentElement) {
-                // Если есть изображение или файл
                 if (contentElement.querySelector('img') || contentElement.querySelector('a[href*="file"]')) {
                     currentContent = contentElement.querySelector('div:last-child')?.textContent || '';
                     if (currentContent.includes('Файл:')) {
@@ -1066,7 +1359,6 @@
 
             try {
                 const token = localStorage.getItem('chat_token');
-                // ИСПРАВЛЕНО: /api/chat/message/{messageId} вместо /api/chat/messages/{messageId}
                 const response = await fetch(`${API_URL}/api/chat/message/${messageId}`, {
                     method: 'PUT',
                     headers: {
@@ -1077,13 +1369,11 @@
                 });
 
                 if (response.ok) {
-                    // Обновляем UI
                     if (contentElement) {
                         contentElement.textContent = newContent;
                     }
                     messageElement.classList.add('edited');
 
-                    // Добавляем метку "ред."
                     const timeElement = messageElement.querySelector('.message-time');
                     if (timeElement && !timeElement.textContent.includes('ред.')) {
                         timeElement.textContent = timeElement.textContent + ' (ред.)';
@@ -1108,7 +1398,6 @@
 
             try {
                 const token = localStorage.getItem('chat_token');
-                // ИСПРАВЛЕНО: /api/chat/message/{messageId} вместо /api/chat/messages/{messageId}
                 const response = await fetch(`${API_URL}/api/chat/message/${messageId}`, {
                     method: 'DELETE',
                     headers: {
@@ -1118,15 +1407,14 @@
                 });
 
                 if (response.ok) {
-                    // Помечаем как удаленное в UI
                     const messageElement = document.getElementById(`message-${messageId}`);
                     if (messageElement) {
                         messageElement.style.opacity = '0.5';
                         messageElement.innerHTML = `
-                    <div class="deleted-message" style="padding: 10px; border-radius: 10px; background: rgba(0,0,0,0.05);">
-                        <i>Сообщение удалено</i>
-                    </div>
-                `;
+                                <div class="deleted-message" style="padding: 10px; border-radius: 10px; background: rgba(0,0,0,0.05);">
+                                    <i>Сообщение удалено</i>
+                                </div>
+                            `;
                     }
                     console.log('✅ Сообщение удалено');
                 } else {
@@ -1140,7 +1428,6 @@
             }
         }
 
-        // Показываем меню сообщения при правом клике
         function setupMessageContextMenu() {
             document.addEventListener('contextmenu', function (e) {
                 const messageElement = e.target.closest('.message');
@@ -1152,7 +1439,6 @@
                 }
             });
 
-            // Скрываем меню при клике
             document.addEventListener('click', function () {
                 const menu = document.getElementById('message-context-menu');
                 if (menu) menu.style.display = 'none';
@@ -1166,32 +1452,31 @@
                 menu = document.createElement('div');
                 menu.id = 'message-context-menu';
                 menu.style.cssText = `
-                    position: fixed;
-                    background: white;
-                    border: 1px solid #ddd;
-                    border-radius: 5px;
-                    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-                    z-index: 1000;
-                    display: none;
-                    min-width: 150px;
-                `;
+                                position: fixed;
+                                background: white;
+                                border: 1px solid #ddd;
+                                border-radius: 5px;
+                                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                                z-index: 1000;
+                                display: none;
+                                min-width: 150px;
+                            `;
                 document.body.appendChild(menu);
             }
 
             menu.innerHTML = `
-                <div class="context-menu-item" onclick="editMessage('${messageId}'); this.parentElement.style.display='none'"
-                     style="padding: 10px 20px; cursor: pointer; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 14px;">✏️</span>
-                    <span>Редактировать</span>
-                </div>
-                <div class="context-menu-item" onclick="deleteMessage('${messageId}'); this.parentElement.style.display='none'"
-                     style="padding: 10px 20px; cursor: pointer; display: flex; align-items: center; gap: 8px; color: #ff4757;">
-                    <span style="font-size: 14px;">🗑️</span>
-                    <span>Удалить</span>
-                </div>
-            `;
+                            <div class="context-menu-item" onclick="editMessage('${messageId}'); this.parentElement.style.display='none'"
+                                 style="padding: 10px 20px; cursor: pointer; border-bottom: 1px solid #eee; display: flex; align-items: center; gap: 8px;">
+                                <span style="font-size: 14px;">✏️</span>
+                                <span>Редактировать</span>
+                            </div>
+                            <div class="context-menu-item" onclick="deleteMessage('${messageId}'); this.parentElement.style.display='none'"
+                                 style="padding: 10px 20px; cursor: pointer; display: flex; align-items: center; gap: 8px; color: #ff4757;">
+                                <span style="font-size: 14px;">🗑️</span>
+                                <span>Удалить</span>
+                            </div>
+                        `;
 
-            // Позиционируем меню
             menu.style.left = Math.min(x, window.innerWidth - 160) + 'px';
             menu.style.top = Math.min(y, window.innerHeight - 100) + 'px';
             menu.style.display = 'block';
@@ -1210,7 +1495,6 @@
 
                 clearTimeout(typingTimeout);
 
-                // Если еще не отправляем сигнал о печатании
                 if (!isTyping && this.value.trim().length > 0) {
                     isTyping = true;
                     connection.invoke("Typing", currentChat.id, true).catch(err =>
@@ -1218,7 +1502,6 @@
                     );
                 }
 
-                // Через 2 секунды после остановки печатания
                 typingTimeout = setTimeout(() => {
                     if (isTyping) {
                         isTyping = false;
@@ -1229,7 +1512,6 @@
                 }, 2000);
             });
 
-            // Когда поле очищается или отправляется сообщение
             input.addEventListener('keyup', function (e) {
                 if (e.key === 'Enter' || this.value.trim().length === 0) {
                     clearTimeout(typingTimeout);
@@ -1240,7 +1522,6 @@
                 }
             });
 
-            // При потере фокуса
             input.addEventListener('blur', function () {
                 clearTimeout(typingTimeout);
                 if (isTyping) {
@@ -1250,7 +1531,6 @@
             });
         }
 
-        // Обработчик получения сигнала о печатании
         function setupTypingHandler() {
             if (!connection) return;
 
@@ -1279,7 +1559,6 @@
                     }
                 }
 
-                // Получаем имя пользователя
                 let userName = 'Кто-то';
                 if (currentChat && currentChat.participants) {
                     const user = currentChat.participants.find(p => p.id === userId);
@@ -1289,13 +1568,13 @@
                 }
 
                 indicator.innerHTML = `
-                    <span style="margin-right: 5px;">${userName}</span>
-                    <div class="typing-dots">
-                        <div class="typing-dot"></div>
-                        <div class="typing-dot"></div>
-                        <div class="typing-dot"></div>
-                    </div>
-                `;
+                                <span style="margin-right: 5px;">${userName}</span>
+                                <div class="typing-dots">
+                                    <div class="typing-dot"></div>
+                                    <div class="typing-dot"></div>
+                                    <div class="typing-dot"></div>
+                                </div>
+                            `;
                 indicator.style.display = 'flex';
             } else if (indicator) {
                 indicator.style.display = 'none';
@@ -1312,27 +1591,20 @@
                 return;
             }
 
-            // Создаем контейнер для уведомлений
             createNotificationContainer();
-
-            // Загружаем профиль и подключаем SignalR
             await loadUserProfile(token);
             await connectSignalR(token);
-
-            // Загружаем чаты и уведомления
             await loadChats(token);
             await initNotifications();
 
-            // Настраиваем обработчики
             setupEventListeners();
-
-            // Новые обработчики
             setupMessageContextMenu();
             setupTypingIndicator();
             setupTypingHandler();
-
-            // Загружаем настройки уведомлений
             await loadNotificationSettings(token);
+
+            // Настройка системы статусов
+            setupIdleDetection();
 
             console.log('✅ Инициализация завершена');
         }
@@ -1383,11 +1655,20 @@
             }
 
             if (statusElement) {
-                statusElement.textContent = currentUser.status || 'Online';
-                statusElement.style.color =
-                    currentUser.status === 'Online' ? 'green' :
-                        currentUser.status === 'DoNotDisturb' ? 'red' :
-                            currentUser.status === 'Away' ? 'orange' : 'gray';
+                const status = currentUser.status || 'Online';
+                statusElement.innerHTML = status + ' ' + getStatusIcon(status);
+                statusElement.style.color = getStatusColor(status);
+            }
+        }
+
+        function getStatusColor(status) {
+            switch (status.toLowerCase()) {
+                case 'online': return 'green';
+                case 'offline': return 'gray';
+                case 'away': return 'orange';
+                case 'busy': return 'darkorange';
+                case 'donotdisturb': return 'red';
+                default: return 'gray';
             }
         }
 
@@ -1406,26 +1687,49 @@
                     .configureLogging(signalR.LogLevel.Warning)
                     .build();
 
-                // ========== ОБРАБОТЧИКИ SIGNALR ==========
-
                 // 1. Входящие сообщения
                 connection.on("ReceiveMessage", (message) => {
                     console.log('📨 SignalR: Получено сообщение от сервера', message);
                     handleIncomingMessage(message);
                 });
 
-                // 2. Уведомления в реальном времени
+                // 2. Уведомления
                 connection.on("ReceiveNotification", (notification) => {
                     console.log('🔔 SignalR: Получено уведомление', notification);
                     handleIncomingNotification(notification);
                 });
 
-                // 3. Изменение статуса пользователя
+                // 3. Изменение статуса пользователя (ВАЖНО!)
                 connection.on("UserStatusChanged", (userId, status) => {
-                    console.log('👤 Статус изменился:', userId, status);
+                    console.log('👤 Статус изменился через SignalR:', userId, status);
+
+                    // Обновляем статус текущего пользователя
                     if (currentUser && userId === currentUser.id) {
                         currentUser.status = status;
                         updateUserUI();
+                    }
+
+                    // Обновляем статусы в текущем чате
+                    if (currentChat && currentChat.participants) {
+                        let participants = currentChat.participants;
+                        if (typeof participants === 'string') {
+                            try {
+                                participants = JSON.parse(participants);
+                            } catch (e) {
+                                participants = [];
+                            }
+                        }
+
+                        if (Array.isArray(participants)) {
+                            const isParticipant = participants.some(p => {
+                                const participantId = p.id || p.userId;
+                                return String(participantId) === String(userId);
+                            });
+
+                            if (isParticipant) {
+                                updateParticipantsStatus({ [userId]: status });
+                            }
+                        }
                     }
                 });
 
@@ -1460,8 +1764,6 @@
                             if (timeElement && !timeElement.textContent.includes('ред.')) {
                                 timeElement.textContent = timeElement.textContent + ' (ред.)';
                             }
-
-                            console.log('✅ UI обновлен для отредактированного сообщения');
                         }
                     }
                 });
@@ -1474,10 +1776,10 @@
                     if (messageElement) {
                         messageElement.style.opacity = '0.5';
                         messageElement.innerHTML = `
-                            <div class="deleted-message">
-                                <i>Сообщение удалено</i>
-                            </div>
-                        `;
+                                        <div class="deleted-message">
+                                            <i>Сообщение удалено</i>
+                                        </div>
+                                    `;
                     }
                 });
 
@@ -1493,17 +1795,14 @@
 
                 connection.onreconnected((connectionId) => {
                     console.log('✅ SignalR переподключен:', connectionId);
-                    // Присоединяемся к текущему чату
                     if (currentChat && connection.state === 'Connected') {
                         connection.invoke("JoinChat", currentChat.id).catch(console.error);
                     }
                 });
 
-                // Подключаемся
                 await connection.start();
                 console.log('✅ SignalR подключен!');
 
-                // Обновляем статус
                 if (currentUser) {
                     try {
                         await connection.invoke("UpdateStatus", currentUser.status || "Online");
@@ -1537,24 +1836,20 @@
 
                 const chatId = message.chatId || message.ChatId;
 
-                // Если это текущий чат - показываем сообщение
                 if (currentChat && chatId === currentChat.id) {
                     message.isMine = false;
                     addSingleMessageToUI(message);
 
-                    // Прокручиваем вниз
                     setTimeout(() => {
                         const container = document.getElementById('messages');
                         if (container) container.scrollTop = container.scrollHeight;
                     }, 100);
 
-                    // Обновляем список чатов
                     const token = localStorage.getItem('chat_token');
                     if (token) {
                         setTimeout(() => loadChats(token), 300);
                     }
                 } else {
-                    // Если не в текущем чате - показываем уведомление
                     showNewMessageNotification(message, chatId);
                 }
             } catch (error) {
@@ -1594,11 +1889,13 @@
             });
 
             let senderName = 'Неизвестный';
+            let senderStatus = 'Offline';
             if (message.sender) {
                 if (typeof message.sender === 'object') {
                     senderName = message.sender.displayName ||
                         message.sender.email?.split('@')[0] ||
                         'Пользователь';
+                    senderStatus = message.sender.status || 'Offline';
                 }
             }
 
@@ -1610,51 +1907,50 @@
 
             if (messageType === 'Image' && fileUrl) {
                 contentHtml = `
-                        <div style="margin-bottom: 5px;">
-                            <img src="${fileUrl}" alt="Изображение"
-                                 style="max-width: 250px; max-height: 250px; border-radius: 10px; cursor: pointer;"
-                                 onclick="openImageModal('${fileUrl}')">
-                        </div>
-                        <div>
-                            <a href="${fileUrl}" target="_blank"
-                               style="color: #0084ff; text-decoration: none; font-size: 12px;">
-                                Скачать изображение
-                            </a>
-                        </div>
-                    `;
+                                <div style="margin-bottom: 5px;">
+                                    <img src="${fileUrl}" alt="Изображение"
+                                         style="max-width: 250px; max-height: 250px; border-radius: 10px; cursor: pointer;"
+                                         onclick="openImageModal('${fileUrl}')">
+                                </div>
+                                <div>
+                                    <a href="${fileUrl}" target="_blank"
+                                       style="color: #0084ff; text-decoration: none; font-size: 12px;">
+                                        Скачать изображение
+                                    </a>
+                                </div>
+                            `;
             } else if (messageType === 'File' && fileUrl) {
                 const fileName = message.fileName || message.FileName || 'Файл';
                 contentHtml = `
-                        <div style="display: flex; align-items: center; gap: 10px; padding: 10px; background: ${isMine ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}; border-radius: 10px;">
-                            <div style="font-size: 24px;">📎</div>
-                            <div style="flex: 1;">
-                                <div style="font-weight: bold;">${escapeHtml(fileName)}</div>
-                                <a href="${fileUrl}" target="_blank"
-                                   style="color: #0084ff; text-decoration: none; font-size: 12px;">
-                                    Скачать файл (${formatFileSize(message.fileSize || message.FileSize || 0)})
-                                </a>
-                            </div>
-                        </div>
-                    `;
+                                <div style="display: flex; align-items: center; gap: 10px; padding: 10px; background: ${isMine ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}; border-radius: 10px;">
+                                    <div style="font-size: 24px;">📎</div>
+                                    <div style="flex: 1;">
+                                        <div style="font-weight: bold;">${escapeHtml(fileName)}</div>
+                                        <a href="${fileUrl}" target="_blank"
+                                           style="color: #0084ff; text-decoration: none; font-size: 12px;">
+                                            Скачать файл (${formatFileSize(message.fileSize || message.FileSize || 0)})
+                                        </a>
+                                    </div>
+                                </div>
+                            `;
             }
 
             messageElement.innerHTML = `
-                    ${!isMine ? `<div class="message-sender">${escapeHtml(senderName)}</div>` : ''}
-                    <div class="message-content">${contentHtml}</div>
-                    <div class="message-time">${time}${message.isEdited ? ' (ред.)' : ''}</div>
-                    ${isMine && !message.isDeleted ? `
-                        <div class="message-actions">
-                            <button class="message-action-btn" onclick="editMessage('${messageId}')" title="Редактировать">
-                                ✏️
-                            </button>
-                            <button class="message-action-btn delete-btn" onclick="deleteMessage('${messageId}')" title="Удалить">
-                                🗑️
-                            </button>
-                        </div>
-                    ` : ''}
-                `;
+                            ${!isMine ? `<div class="message-sender">${escapeHtml(senderName)} ${getStatusIcon(senderStatus)}</div>` : ''}
+                            <div class="message-content">${contentHtml}</div>
+                            <div class="message-time">${time}${message.isEdited ? ' (ред.)' : ''}</div>
+                            ${isMine && !message.isDeleted ? `
+                                <div class="message-actions">
+                                    <button class="message-action-btn" onclick="editMessage('${messageId}')" title="Редактировать">
+                                        ✏️
+                                    </button>
+                                    <button class="message-action-btn delete-btn" onclick="deleteMessage('${messageId}')" title="Удалить">
+                                        🗑️
+                                    </button>
+                                </div>
+                            ` : ''}
+                        `;
 
-            // Добавляем обработчики для кнопок действий
             if (isMine && !message.isDeleted) {
                 messageElement.style.position = 'relative';
                 messageElement.onmouseenter = function () {
@@ -1670,7 +1966,6 @@
 
             container.appendChild(messageElement);
 
-            // Если сообщение отправлено - снимаем статус отправки
             if (message.isSending) {
                 setTimeout(() => {
                     const element = document.getElementById(elementId);
@@ -1695,17 +1990,20 @@
             const originalContent = content;
             input.value = '';
 
+            // Создаем уникальный ID для временного сообщения
+            const tempMessageId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
             try {
                 const token = localStorage.getItem('chat_token');
 
-                // 1. Создаем временное сообщение для мгновенного отображения
-                const tempMessageId = `temp-${Date.now()}`;
+                // 1. Создаем временное сообщение
                 const tempMessage = {
                     id: tempMessageId,
                     content: originalContent,
                     sender: {
                         displayName: currentUser.displayName || 'Вы',
-                        id: currentUser.id
+                        id: currentUser.id,
+                        status: currentUser.status || 'Online'
                     },
                     sentAt: new Date().toISOString(),
                     isMine: true,
@@ -1714,10 +2012,9 @@
                     isSending: true
                 };
 
-                // Добавляем временное сообщение сразу
                 addSingleMessageToUI(tempMessage);
 
-                // 2. Отправляем на сервер через REST API
+                // 2. Отправляем на сервер
                 const response = await fetch(`${API_URL}/api/chat/send`, {
                     method: 'POST',
                     headers: {
@@ -1736,7 +2033,6 @@
                     const errorText = await response.text();
                     console.error('❌ Ошибка сервера:', response.status, errorText);
 
-                    // Помечаем временное сообщение как неотправленное
                     const tempElement = document.getElementById(`message-${tempMessageId}`);
                     if (tempElement) {
                         tempElement.innerHTML += '<div style="color: #e74c3c; font-size: 12px; margin-top: 5px;">❌ Не доставлено</div>';
@@ -1751,22 +2047,21 @@
                 const savedMessage = await response.json();
                 console.log('✅ Сообщение сохранено на сервере:', savedMessage);
 
-                // 3. Заменяем временное сообщение на сохраненное
+                // 3. Заменяем временное сообщение
                 const tempElement = document.getElementById(`message-${tempMessageId}`);
                 if (tempElement) {
-                    // Плавно удаляем временное сообщение
                     tempElement.style.opacity = '0.5';
                     setTimeout(() => {
                         if (tempElement.parentNode) {
                             tempElement.parentNode.removeChild(tempElement);
                         }
 
-                        // Добавляем сохраненное сообщение из сервера
                         if (savedMessage.id && !shownMessageIds.has(savedMessage.id)) {
                             savedMessage.isMine = true;
                             savedMessage.sender = {
                                 displayName: currentUser.displayName || 'Вы',
-                                id: currentUser.id
+                                id: currentUser.id,
+                                status: currentUser.status || 'Online'
                             };
                             shownMessageIds.add(savedMessage.id);
                             addSingleMessageToUI(savedMessage);
@@ -1774,12 +2069,10 @@
                     }, 300);
                 }
 
-                // 4. Обновляем список чатов
                 setTimeout(() => {
                     loadChats(token);
                 }, 300);
 
-                // 5. Прокручиваем вниз
                 setTimeout(() => {
                     const container = document.getElementById('messages');
                     if (container) container.scrollTop = container.scrollHeight;
@@ -1833,13 +2126,13 @@
                 const initials = getInitials(chatName);
 
                 chatElement.innerHTML = `
-                        <div class="chat-avatar">${initials}</div>
-                        <div class="chat-info">
-                            <div class="chat-name">${escapeHtml(chatName)}</div>
-                            <div class="chat-last">${escapeHtml(chat.lastMessage || 'Нет сообщений')}</div>
-                        </div>
-                        ${chat.unreadCount > 0 ? `<div class="chat-unread">${chat.unreadCount}</div>` : ''}
-                    `;
+                                <div class="chat-avatar">${initials}</div>
+                                <div class="chat-info">
+                                    <div class="chat-name">${escapeHtml(chatName)}</div>
+                                    <div class="chat-last">${escapeHtml(chat.lastMessage || 'Нет сообщений')}</div>
+                                </div>
+                                ${chat.unreadCount > 0 ? `<div class="chat-unread">${chat.unreadCount}</div>` : ''}
+                            `;
 
                 chatElement.onclick = () => selectChat(chat);
                 container.appendChild(chatElement);
@@ -1892,12 +2185,34 @@
         async function selectChat(chat) {
             console.log('🎯 Выбран чат:', chat);
 
-            // Очищаем показанные ID при смене чата
+            // Отладка
+            console.log('Участники чата:', chat.participants);
+            console.log('Тип participants:', typeof chat.participants);
+
+            if (typeof chat.participants === 'string') {
+                try {
+                    console.log('Парсим participants строку...');
+                    chat.participants = JSON.parse(chat.participants);
+                    console.log('Успешно распарсено:', chat.participants);
+                } catch (e) {
+                    console.error('Ошибка парсинга participants:', e);
+                    chat.participants = [];
+                }
+            }
+
+            console.log('Участники после обработки:', chat.participants);
+
             shownMessageIds.clear();
 
             currentChat = chat;
             updateChatUI();
             await loadMessages(chat.id);
+
+            // Загружаем статусы только если есть участники
+            if (chat.participants && Array.isArray(chat.participants) && chat.participants.length > 0) {
+                await loadUserStatuses();
+            }
+
             renderChats();
 
             if (connection && connection.state === 'Connected') {
@@ -2108,15 +2423,15 @@
                 options.Type === 'system' ? '🔔' : '📱';
 
             notification.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 12px; background: white; border-radius: 10px; padding: 15px; margin-bottom: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.2); border-left: 4px solid #0084ff; animation: slideIn 0.3s ease; cursor: pointer;">
-                    <div style="font-size: 20px; color: #0084ff;">${icon}</div>
-                    <div style="flex: 1;">
-                        <div style="font-weight: bold; font-size: 14px; margin-bottom: 3px;">${escapeHtml(title)}</div>
-                        <div style="font-size: 13px; color: #666;">${escapeHtml(message)}</div>
-                    </div>
-                    <button onclick="document.getElementById('${notificationId}').remove()" style="background: none; border: none; color: #999; cursor: pointer; font-size: 18px; padding: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">×</button>
-                </div>
-            `;
+                            <div style="display: flex; align-items: center; gap: 12px; background: white; border-radius: 10px; padding: 15px; margin-bottom: 10px; box-shadow: 0 5px 15px rgba(0,0,0,0.2); border-left: 4px solid #0084ff; animation: slideIn 0.3s ease; cursor: pointer;">
+                                <div style="font-size: 20px; color: #0084ff;">${icon}</div>
+                                <div style="flex: 1;">
+                                    <div style="font-weight: bold; font-size: 14px; margin-bottom: 3px;">${escapeHtml(title)}</div>
+                                    <div style="font-size: 13px; color: #666;">${escapeHtml(message)}</div>
+                                </div>
+                                <button onclick="document.getElementById('${notificationId}').remove()" style="background: none; border: none; color: #999; cursor: pointer; font-size: 18px; padding: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;">×</button>
+                            </div>
+                        `;
 
             notification.onclick = function () {
                 if (options.Data) {
@@ -2323,26 +2638,26 @@
                     notification.notificationType === 'system' ? '🔔' : '📱';
 
                 notificationElement.innerHTML = `
-                    <div style="display: flex; align-items: flex-start; gap: 10px;">
-                        <div style="font-size: 18px;">${icon}</div>
-                        <div style="flex: 1;">
-                            <div style="font-weight: bold; margin-bottom: 5px;">${escapeHtml(notification.title)}</div>
-                            <div style="color: #666; font-size: 13px; margin-bottom: 5px;">${escapeHtml(notification.message)}</div>
-                            <div style="color: #999; font-size: 11px;">${new Date(notification.createdAt).toLocaleString()}</div>
-                        </div>
-                        <div style="display: flex; gap: 5px;">
-                            ${!notification.isRead ?
+                                <div style="display: flex; align-items: flex-start; gap: 10px;">
+                                    <div style="font-size: 18px;">${icon}</div>
+                                    <div style="flex: 1;">
+                                        <div style="font-weight: bold; margin-bottom: 5px;">${escapeHtml(notification.title)}</div>
+                                        <div style="color: #666; font-size: 13px; margin-bottom: 5px;">${escapeHtml(notification.message)}</div>
+                                        <div style="color: #999; font-size: 11px;">${new Date(notification.createdAt).toLocaleString()}</div>
+                                    </div>
+                                    <div style="display: flex; gap: 5px;">
+                                        ${!notification.isRead ?
                         `<button onclick="markNotificationAsRead(${notification.id}, this)"
-                                        style="background: #0084ff; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 11px;">
-                                    Прочитать
-                                </button>` : ''}
-                            <button onclick="deleteNotification(${notification.id}, this)"
-                                    style="background: #ff4757; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 11px;">
-                                Удалить
-                            </button>
-                        </div>
-                    </div>
-                `;
+                                                    style="background: #0084ff; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 11px;">
+                                                Прочитать
+                                            </button>` : ''}
+                                        <button onclick="deleteNotification(${notification.id}, this)"
+                                                style="background: #ff4757; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 11px;">
+                                            Удалить
+                                        </button>
+                                    </div>
+                                </div>
+                            `;
 
                 notificationElement.onclick = function () {
                     try {
@@ -2434,6 +2749,8 @@
         // ========== ПРОФИЛЬ И НАСТРОЙКИ ==========
         function showProfilePanel() {
             document.getElementById('profile-panel').style.display = 'flex';
+            // Устанавливаем активную кнопку текущего статуса
+            updateStatusButtons(currentUser?.status || 'Online');
         }
 
         function hideProfilePanel() {
@@ -2505,25 +2822,6 @@
             }
         }
 
-        async function updateStatus(status) {
-            if (!connection || connection.state !== 'Connected') return;
-
-            try {
-                await connection.invoke("UpdateStatus", status);
-                currentUser.status = status;
-                updateUserUI();
-
-                // Обновляем активные кнопки
-                document.querySelectorAll('.status-option').forEach(btn => {
-                    btn.classList.remove('active');
-                });
-                event.target.classList.add('active');
-
-            } catch (error) {
-                console.error('Ошибка обновления статуса:', error);
-            }
-        }
-
         // ========== ПРИКРЕПЛЕНИЕ ФАЙЛОВ ==========
         function toggleAttachMenu() {
             const menu = document.getElementById('attach-menu');
@@ -2587,7 +2885,6 @@
                 const formData = new FormData();
                 formData.append('file', file);
 
-                // Загружаем файл
                 const uploadResponse = await fetch(`${API_URL}/api/upload/file`, {
                     method: 'POST',
                     headers: {
@@ -2602,14 +2899,16 @@
 
                 const uploadResult = await uploadResponse.json();
 
-                // Создаем временное сообщение
-                const tempMessageId = `file-temp-${Date.now()}`;
+                // Создаем уникальный ID для временного сообщения
+                const tempMessageId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
                 const tempMessage = {
                     id: tempMessageId,
                     content: `Отправка файла: ${file.name}`,
                     sender: {
                         displayName: currentUser.displayName || 'Вы',
-                        id: currentUser.id
+                        id: currentUser.id,
+                        status: currentUser.status || 'Online'
                     },
                     sentAt: new Date().toISOString(),
                     isMine: true,
@@ -2620,7 +2919,6 @@
 
                 addSingleMessageToUI(tempMessage);
 
-                // Отправляем сообщение с файлом
                 const messageDto = {
                     chatId: currentChat.id,
                     content: `Файл: ${file.name}`,
@@ -2646,7 +2944,6 @@
 
                 const savedMessage = await messageResponse.json();
 
-                // Заменяем временное сообщение
                 const tempElement = document.getElementById(`message-${tempMessageId}`);
                 if (tempElement) {
                     tempElement.style.opacity = '0.5';
@@ -2659,7 +2956,8 @@
                             savedMessage.isMine = true;
                             savedMessage.sender = {
                                 displayName: currentUser.displayName || 'Вы',
-                                id: currentUser.id
+                                id: currentUser.id,
+                                status: currentUser.status || 'Online'
                             };
                             shownMessageIds.add(savedMessage.id);
                             addSingleMessageToUI(savedMessage);
@@ -2803,7 +3101,7 @@
                 }
             });
 
-            // Отслеживание активности
+            // Обновление активности пользователя
             document.addEventListener('mousemove', updateUserActivity);
             document.addEventListener('keypress', updateUserActivity);
             document.addEventListener('click', updateUserActivity);

@@ -1,18 +1,20 @@
-﻿namespace Backend_chat  // ИЗМЕНИЛ ЗДЕСЬ - убрал ".Enums"
+﻿namespace Backend_chat
 {
     public enum UserStatus
     {
-        Offline,
-        Online,
-        DoNotDisturb,
-        Away
+        Offline = 0,
+        Online = 1,
+        Away = 2,
+        Busy = 3,
+        DoNotDisturb = 4
     }
 
     public enum MessageType
     {
-        Text,
-        Image,
-        File,
-        System
+        Text = 0,
+        Image = 1,
+        File = 2,
+        Video = 3,
+        Audio = 4
     }
 }

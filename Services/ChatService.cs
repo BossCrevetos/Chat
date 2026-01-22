@@ -36,7 +36,17 @@ namespace Backend_chat.Services
                 .OrderByDescending(c => c.Messages.OrderByDescending(m => m.SentAt).FirstOrDefault().SentAt)
                 .ToListAsync();
 
-            return chats.Select(MapToChatDto).ToList();
+            return chats.Select(chat => {
+                var dto = MapToChatDto(chat);
+
+                // Гарантируем, что participants всегда массив
+                if (dto.Participants == null)
+                {
+                    dto.Participants = new List<UserDto>();
+                }
+
+                return dto;
+            }).ToList();
         }
 
         public async Task<ChatDto> GetOrCreatePrivateChatAsync(string userId, string otherUserId)
@@ -211,7 +221,8 @@ namespace Backend_chat.Services
                                     message.Sender?.Email?.Split('@')[0] ??
                                     "Пользователь",
                         Email = message.Sender?.Email,
-                        AvatarUrl = message.Sender?.AvatarUrl
+                        AvatarUrl = message.Sender?.AvatarUrl,
+                        Status = message.Sender?.Status.ToString() ?? "Online"
                     },
                     SentAt = message.SentAt,
                     IsMine = false
@@ -318,14 +329,57 @@ namespace Backend_chat.Services
 
         public async Task<bool> UpdateUserStatusAsync(string userId, UserStatus status)
         {
-            var user = await _context.Users.FindAsync(userId);
-            if (user == null)
-                return false;
+            try
+            {
+                _logger.LogInformation($"Updating user {userId} status to {status}");
 
-            user.Status = status;
-            user.LastSeen = DateTime.UtcNow;
-            await _context.SaveChangesAsync();
-            return true;
+                var user = await _context.Users.FindAsync(userId);
+                if (user == null)
+                {
+                    _logger.LogWarning($"User {userId} not found");
+                    return false;
+                }
+
+                user.Status = status;
+                user.LastSeen = DateTime.UtcNow;
+
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation($"User {userId} status updated to {status}");
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error updating user status for {userId}");
+                return false;
+            }
+        }
+
+        // Новый метод для получения статусов пользователей
+        public async Task<Dictionary<string, string>> GetUsersStatuses(List<string> userIds)
+        {
+            var result = new Dictionary<string, string>();
+
+            var users = await _context.Users
+                .Where(u => userIds.Contains(u.Id))
+                .ToListAsync();
+
+            foreach (var user in users)
+            {
+                result[user.Id] = user.Status.ToString();
+            }
+
+            // Добавляем отсутствующих пользователей как Offline
+            foreach (var userId in userIds)
+            {
+                if (!result.ContainsKey(userId))
+                {
+                    result[userId] = "Offline";
+                }
+            }
+
+            return result;
         }
 
         public async Task<List<UserDto>> SearchUsersAsync(string userId, string query)

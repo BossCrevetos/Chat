@@ -12,7 +12,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.OpenApi.Models;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,35 +19,6 @@ var builder = WebApplication.CreateBuilder(args);
 // Конфигурация
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-
-// Swagger с JWT поддержкой
-builder.Services.AddSwaggerGen(options =>
-{
-    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Name = "Authorization",
-        Type = SecuritySchemeType.Http,
-        Scheme = "Bearer",
-        BearerFormat = "JWT",
-        In = ParameterLocation.Header,
-        Description = "Введите 'Bearer' [пробел] и ваш JWT токен"
-    });
-
-    options.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
-            },
-            Array.Empty<string>()
-        }
-    });
-});
 
 // База данных
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
@@ -119,24 +89,14 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// CORS с большим количеством origin
+// CORS - ПРОСТАЯ НАСТРОЙКА БЕЗ Swagger
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("ClientPermission", policy =>
+    options.AddPolicy("AllowAll", policy =>
     {
-        policy.AllowAnyHeader()
+        policy.AllowAnyOrigin()
               .AllowAnyMethod()
-              .WithOrigins(
-                  "http://localhost:3000", "https://localhost:3000",
-                  "http://localhost:5500", "https://localhost:5500",
-                  "http://localhost:8080", "https://localhost:8080",
-                  "http://localhost:4200", "https://localhost:4200",
-                  "http://localhost:5000", "https://localhost:5000",
-                  "http://127.0.0.1:5500", "http://127.0.0.1:3000",
-                  "http://127.0.0.1:8080",
-                  "http://localhost", "http://localhost:*"
-              )
-              .AllowCredentials();
+              .AllowAnyHeader();
     });
 });
 
@@ -144,21 +104,19 @@ builder.Services.AddCors(options =>
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IChatService, ChatService>();
 builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<ChatService>();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// УБИРАЕМ Swagger и HTTPS для простоты
+// app.UseSwagger();
+// app.UseSwaggerUI();
+// app.UseHttpsRedirection();
 
-app.UseHttpsRedirection();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-// ВАЖНО: UseCors должен быть ДО UseAuthentication и UseAuthorization
-app.UseCors("ClientPermission");
+app.UseCors("AllowAll");
 
 app.UseRouting();
 
@@ -239,82 +197,12 @@ using (var scope = app.Services.CreateScope())
                 await dbContext.SaveChangesAsync();
             }
         }
-
-        // Создание чата между ними
-        if (testUser != null && testUser2 != null)
-        {
-            try
-            {
-                Console.WriteLine($"🔄 Создание чата между {testUser.Email} и {testUser2.Email}...");
-                var chat = await chatService.GetOrCreatePrivateChatAsync(testUser.Id, testUser2.Id);
-                Console.WriteLine($"✅ Создан чат ID: {chat.Id}");
-
-                // Тестовое сообщение
-                try
-                {
-                    var message = await chatService.SendMessageAsync(testUser.Id, new SendMessageDto
-                    {
-                        ChatId = chat.Id,
-                        Content = "Привет! Это тестовое сообщение",
-                        MessageType = "Text"
-                    });
-                    Console.WriteLine($"✅ Отправлено тестовое сообщение: ID {message.Id}");
-
-                    // Тестовое уведомление
-                    await notificationService.CreateNotificationAsync(testUser2.Id, new CreateNotificationDto
-                    {
-                        Title = "Добро пожаловать!",
-                        Message = "Вы успешно зарегистрировались в чате",
-                        NotificationType = "system"
-                    });
-
-                }
-                catch (Exception msgEx)
-                {
-                    Console.WriteLine($"⚠️ Не удалось отправить тестовое сообщение: {msgEx.Message}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"⚠️ Не удалось создать чат: {ex.Message}");
-            }
-        }
-
-        // Тестовый пользователь 3
-        var testUser3 = await userManager.FindByEmailAsync("demo@example.com");
-        if (testUser3 == null)
-        {
-            testUser3 = new User
-            {
-                Email = "demo@example.com",
-                UserName = "demo@example.com",
-                DisplayName = "Демо Пользователь",
-                EmailConfirmed = true
-            };
-            var result3 = await userManager.CreateAsync(testUser3, "demo123");
-            if (result3.Succeeded)
-            {
-                Console.WriteLine($"✅ Создан демо пользователь: demo@example.com / demo123");
-
-                var notificationSettings3 = new NotificationSettings
-                {
-                    UserId = testUser3.Id,
-                    EnableNotifications = true,
-                    EnableSound = true,
-                    ShowBanner = true,
-                    SmartNotifications = true
-                };
-                dbContext.NotificationSettings.Add(notificationSettings3);
-                await dbContext.SaveChangesAsync();
-            }
-        }
-
     }
     catch (Exception ex)
     {
         Console.WriteLine($"⚠️ Ошибка при создании тестовых данных: {ex.Message}");
-        Console.WriteLine($"StackTrace: {ex.StackTrace}");
     }
 }
 
-app.Run();
+// Запуск на всех интерфейсах
+app.Run("http://0.0.0.0:5086");

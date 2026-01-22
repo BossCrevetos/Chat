@@ -4,7 +4,7 @@ namespace Backend_chat.Services
 {
     public interface IAuthService
     {
-        Task<AuthResponseDto> RegisterAsync(AuthDto registerDto);
+        Task<AuthResponseDto> RegisterAsync(RegisterDto registerDto);
         Task<AuthResponseDto> LoginAsync(LoginDto loginDto);
         Task<AuthResponseDto> ExternalLoginAsync(ExternalAuthDto externalAuthDto);
         Task<bool> ForgotPasswordAsync(string email);

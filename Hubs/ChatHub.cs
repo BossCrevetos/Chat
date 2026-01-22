@@ -20,9 +20,11 @@ namespace Backend_chat.Hubs
         private readonly INotificationService _notificationService;
         private readonly ApplicationDbContext _context;
 
-        // Для отслеживания активности пользователей в чатах
-        private static readonly Dictionary<string, int> _activeUsersInChats = new();
+        // Для отслеживания активности пользователей
+        private static readonly Dictionary<string, string> _userConnections = new();
+        private static readonly Dictionary<string, UserStatus> _userStatuses = new();
         private static readonly Dictionary<string, DateTime> _userLastActivity = new();
+        private static readonly Dictionary<string, List<int>> _userActiveChats = new();
 
         public ChatHub(
             IChatService chatService,
@@ -43,14 +45,31 @@ namespace Backend_chat.Hubs
             var userId = Context.UserIdentifier;
             if (userId != null)
             {
-                await _chatService.UpdateUserStatusAsync(userId, UserStatus.Online);
-                await Clients.All.SendAsync("UserStatusChanged", userId, UserStatus.Online.ToString());
+                _logger.LogInformation($"User {userId} connected with connection {Context.ConnectionId}");
 
-                // Обновляем активность
-                _userLastActivity[userId] = DateTime.UtcNow;
+                // Сохраняем соединение
+                _userConnections[Context.ConnectionId] = userId;
+
+                // Получаем пользователя из БД
+                var user = await _userManager.FindByIdAsync(userId);
+                if (user != null)
+                {
+                    // Обновляем статус в БД
+                    user.Status = UserStatus.Online;
+                    user.LastSeen = DateTime.UtcNow;
+                    await _userManager.UpdateAsync(user);
+
+                    // Сохраняем статус в памяти
+                    _userStatuses[userId] = UserStatus.Online;
+                    _userLastActivity[userId] = DateTime.UtcNow;
+
+                    // Уведомляем всех о новом статусе
+                    await Clients.All.SendAsync("UserStatusChanged", userId, "Online");
+
+                    _logger.LogInformation($"User {userId} status updated to Online");
+                }
             }
             await base.OnConnectedAsync();
-            _logger.LogInformation($"User {userId} connected");
         }
 
         public override async Task OnDisconnectedAsync(Exception? exception)
@@ -58,21 +77,96 @@ namespace Backend_chat.Hubs
             var userId = Context.UserIdentifier;
             if (userId != null)
             {
-                await _chatService.UpdateUserStatusAsync(userId, UserStatus.Offline);
-                await Clients.All.SendAsync("UserStatusChanged", userId, UserStatus.Offline.ToString());
+                _logger.LogInformation($"User {userId} disconnected, connection: {Context.ConnectionId}");
 
-                // Удаляем из активных чатов
-                var activeChats = _activeUsersInChats.Where(x => x.Key.StartsWith($"{userId}_")).ToList();
-                foreach (var chat in activeChats)
+                // Удаляем соединение
+                _userConnections.Remove(Context.ConnectionId);
+
+                // Проверяем, есть ли другие активные соединения у этого пользователя
+                var hasOtherConnections = _userConnections.Values.Any(v => v == userId);
+
+                if (!hasOtherConnections)
                 {
-                    _activeUsersInChats.Remove(chat.Key);
+                    // Если это последнее соединение - меняем статус на Offline
+                    var user = await _userManager.FindByIdAsync(userId);
+                    if (user != null)
+                    {
+                        user.Status = UserStatus.Offline;
+                        await _userManager.UpdateAsync(user);
+
+                        _userStatuses[userId] = UserStatus.Offline;
+
+                        // Уведомляем всех
+                        await Clients.All.SendAsync("UserStatusChanged", userId, "Offline");
+
+                        _logger.LogInformation($"User {userId} status updated to Offline (no active connections)");
+                    }
+
+                    // Очищаем активные чаты пользователя
+                    if (_userActiveChats.ContainsKey(userId))
+                    {
+                        _userActiveChats.Remove(userId);
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation($"User {userId} still has other active connections");
                 }
             }
             await base.OnDisconnectedAsync(exception);
-            _logger.LogInformation($"User {userId} disconnected");
         }
 
-        // Метод для отправки сообщений - ОТПРАВЛЯЕТ ТОЛЬКО ДРУГИМ ПОЛЬЗОВАТЕЛЯМ
+        // Метод для обновления статуса вручную
+        public async Task UpdateStatus(string status)
+        {
+            var userId = Context.UserIdentifier;
+            if (userId != null)
+            {
+                _logger.LogInformation($"User {userId} updating status to {status}");
+
+                if (Enum.TryParse<UserStatus>(status, out var userStatus))
+                {
+                    // Обновляем статус в БД
+                    var user = await _userManager.FindByIdAsync(userId);
+                    if (user != null)
+                    {
+                        user.Status = userStatus;
+                        user.LastSeen = DateTime.UtcNow;
+                        await _userManager.UpdateAsync(user);
+
+                        // Сохраняем статус в памяти
+                        _userStatuses[userId] = userStatus;
+                        _userLastActivity[userId] = DateTime.UtcNow;
+
+                        // Уведомляем всех
+                        await Clients.All.SendAsync("UserStatusChanged", userId, status);
+
+                        _logger.LogInformation($"User {userId} status changed to {status}");
+                    }
+                }
+            }
+        }
+
+        // Метод для обновления активности (вызывается при любом действии пользователя)
+        public async Task UpdateUserActivity()
+        {
+            var userId = Context.UserIdentifier;
+            if (userId != null)
+            {
+                _userLastActivity[userId] = DateTime.UtcNow;
+
+                // Если статус был Away - меняем на Online
+                if (_userStatuses.TryGetValue(userId, out var currentStatus))
+                {
+                    if (currentStatus == UserStatus.Away)
+                    {
+                        await UpdateStatus("Online");
+                    }
+                }
+            }
+        }
+
+        // Метод для отправки сообщений
         public async Task SendMessage(int chatId, string content)
         {
             var userId = Context.UserIdentifier;
@@ -80,6 +174,9 @@ namespace Backend_chat.Hubs
 
             try
             {
+                // Обновляем активность
+                _userLastActivity[userId] = DateTime.UtcNow;
+
                 // Отправляем сообщение через ChatService
                 var messageDto = new SendMessageDto
                 {
@@ -90,11 +187,9 @@ namespace Backend_chat.Hubs
 
                 var message = await _chatService.SendMessageAsync(userId, messageDto);
 
-                // Получаем информацию о чате и пользователях
+                // Получаем информацию о чате
                 var chat = await _context.Chats
                     .Include(c => c.ChatUsers)
-                        .ThenInclude(cu => cu.User)
-                    .Include(c => c.Messages.OrderByDescending(m => m.SentAt).Take(1))
                     .FirstOrDefaultAsync(c => c.Id == chatId);
 
                 if (chat != null)
@@ -125,7 +220,6 @@ namespace Backend_chat.Hubs
                                 senderName = senderName
                             });
 
-                            // Отправляем уведомление через SignalR
                             await SendNotificationToUser(
                                 chatUser.UserId,
                                 $"Новое сообщение от {senderName}",
@@ -136,6 +230,8 @@ namespace Backend_chat.Hubs
                         }
                     }
                 }
+
+                _logger.LogInformation($"Message sent to chat {chatId} from {userId}");
             }
             catch (Exception ex)
             {
@@ -152,7 +248,6 @@ namespace Backend_chat.Hubs
 
             try
             {
-                // Обновляем активность
                 _userLastActivity[userId] = DateTime.UtcNow;
 
                 var fileMessage = JsonSerializer.Deserialize<FileMessageDto>(fileMessageJson);
@@ -213,7 +308,7 @@ namespace Backend_chat.Hubs
         {
             try
             {
-                Console.WriteLine($"🔔 Отправляю уведомление пользователю {userId}: {title}");
+                _logger.LogInformation($"Sending notification to user {userId}: {title}");
 
                 var notification = new
                 {
@@ -226,11 +321,11 @@ namespace Backend_chat.Hubs
                 };
 
                 await Clients.User(userId).SendAsync("ReceiveNotification", notification);
-                Console.WriteLine($"✅ Уведомление отправлено через SignalR");
+                _logger.LogInformation($"Notification sent via SignalR");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Ошибка отправки уведомления: {ex.Message}");
+                _logger.LogError($"Error sending notification: {ex.Message}");
             }
         }
 
@@ -248,7 +343,6 @@ namespace Backend_chat.Hubs
         {
             try
             {
-                // Получаем чат с пользователями
                 var chat = await _context.Chats
                     .Include(c => c.ChatUsers)
                         .ThenInclude(cu => cu.User)
@@ -259,26 +353,20 @@ namespace Backend_chat.Hubs
                 var sender = await _userManager.FindByIdAsync(senderId);
                 var senderName = sender?.DisplayName ?? sender?.Email?.Split('@')[0] ?? "Пользователь";
 
-                // Отправляем уведомления всем участникам чата кроме отправителя
                 foreach (var chatUser in chat.ChatUsers)
                 {
                     if (chatUser.UserId == senderId) continue;
 
                     var userKey = $"{chatUser.UserId}_{chatId}";
 
-                    // Умные уведомления: не отправляем если пользователь активен в этом чате
-                    var isUserActiveInChat = _activeUsersInChats.ContainsKey(userKey);
-
                     // Проверяем настройки уведомлений пользователя
                     var userSettings = await _context.NotificationSettings
                         .FirstOrDefaultAsync(ns => ns.UserId == chatUser.UserId);
 
-                    var shouldSendNotification = !isUserActiveInChat &&
-                                                (userSettings == null || userSettings.EnableNotifications);
+                    var shouldSendNotification = userSettings == null || userSettings.EnableNotifications;
 
                     if (shouldSendNotification)
                     {
-                        // Создаем уведомление в БД
                         var notification = await _notificationService.CreateNotificationAsync(chatUser.UserId, new CreateNotificationDto
                         {
                             Title = $"Новое сообщение от {senderName}",
@@ -295,7 +383,6 @@ namespace Backend_chat.Hubs
                             })
                         });
 
-                        // Отправляем уведомление через SignalR
                         await Clients.User(chatUser.UserId).SendAsync("ReceiveNotification", new
                         {
                             Id = notification.Id,
@@ -308,7 +395,6 @@ namespace Backend_chat.Hubs
                             CreatedAt = DateTime.UtcNow
                         });
 
-                        // Отправляем браузерное уведомление если разрешено
                         if (userSettings == null || userSettings.ShowBanner)
                         {
                             await Clients.User(chatUser.UserId).SendAsync("ShowBrowserNotification", new
@@ -335,9 +421,17 @@ namespace Backend_chat.Hubs
 
             await Groups.AddToGroupAsync(Context.ConnectionId, $"chat_{chatId}");
 
-            // Отмечаем пользователя как активного в этом чате
-            var userKey = $"{userId}_{chatId}";
-            _activeUsersInChats[userKey] = chatId;
+            // Добавляем чат в список активных для пользователя
+            if (!_userActiveChats.ContainsKey(userId))
+            {
+                _userActiveChats[userId] = new List<int>();
+            }
+
+            if (!_userActiveChats[userId].Contains(chatId))
+            {
+                _userActiveChats[userId].Add(chatId);
+            }
+
             _userLastActivity[userId] = DateTime.UtcNow;
 
             _logger.LogInformation($"User {userId} joined chat {chatId}");
@@ -350,20 +444,17 @@ namespace Backend_chat.Hubs
 
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"chat_{chatId}");
 
-            // Убираем пользователя из активных в этом чате
-            var userKey = $"{userId}_{chatId}";
-            _activeUsersInChats.Remove(userKey);
+            // Убираем чат из списка активных
+            if (_userActiveChats.ContainsKey(userId))
+            {
+                _userActiveChats[userId].Remove(chatId);
+                if (_userActiveChats[userId].Count == 0)
+                {
+                    _userActiveChats.Remove(userId);
+                }
+            }
 
             _logger.LogInformation($"User {userId} left chat {chatId}");
-        }
-
-        public async Task UpdateUserActivity()
-        {
-            var userId = Context.UserIdentifier;
-            if (userId != null)
-            {
-                _userLastActivity[userId] = DateTime.UtcNow;
-            }
         }
 
         // ========== МЕТОД TYPING ==========
@@ -386,10 +477,8 @@ namespace Backend_chat.Hubs
                     Data = data
                 };
 
-                // Сохраняем уведомление в БД
                 var notification = await _notificationService.CreateNotificationAsync(userId, notificationDto);
 
-                // Отправляем уведомление через SignalR
                 var signalrNotification = new
                 {
                     Id = notification.Id,
@@ -403,11 +492,11 @@ namespace Backend_chat.Hubs
 
                 await Clients.User(userId).SendAsync("ReceiveNotification", signalrNotification);
 
-                _logger.LogInformation($"Уведомление отправлено пользователю {userId}: {title}");
+                _logger.LogInformation($"Notification sent to user {userId}: {title}");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка отправки уведомления через SignalR");
+                _logger.LogError(ex, "Error sending notification via SignalR");
             }
         }
 
@@ -430,15 +519,51 @@ namespace Backend_chat.Hubs
             return $"Server says: {message} at {DateTime.Now:HH:mm:ss}";
         }
 
-        public async Task UpdateStatus(string status)
+        // Получение статусов пользователей
+        public async Task<Dictionary<string, string>> GetUserStatuses(List<string> userIds)
+        {
+            var result = new Dictionary<string, string>();
+
+            foreach (var userId in userIds)
+            {
+                if (_userStatuses.TryGetValue(userId, out var status))
+                {
+                    result[userId] = status.ToString();
+                }
+                else
+                {
+                    // Если статуса нет в памяти, берем из базы данных
+                    var user = await _userManager.FindByIdAsync(userId);
+                    if (user != null)
+                    {
+                        result[userId] = user.Status.ToString();
+                        _userStatuses[userId] = user.Status;
+                    }
+                    else
+                    {
+                        result[userId] = "Offline";
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        // Проверка активности пользователя
+        public async Task CheckUserActivity()
         {
             var userId = Context.UserIdentifier;
-            if (userId != null)
+            if (userId != null && _userLastActivity.ContainsKey(userId))
             {
-                if (Enum.TryParse<UserStatus>(status, out var userStatus))
+                var timeSinceLastActivity = DateTime.UtcNow - _userLastActivity[userId];
+
+                // Если пользователь неактивен более 5 минут и не в статусе Away/DND
+                if (timeSinceLastActivity.TotalMinutes >= 5 &&
+                    _userStatuses.TryGetValue(userId, out var currentStatus) &&
+                    currentStatus != UserStatus.DoNotDisturb &&
+                    currentStatus != UserStatus.Away)
                 {
-                    await _chatService.UpdateUserStatusAsync(userId, userStatus);
-                    await Clients.All.SendAsync("UserStatusChanged", userId, status);
+                    await UpdateStatus("Away");
                 }
             }
         }
